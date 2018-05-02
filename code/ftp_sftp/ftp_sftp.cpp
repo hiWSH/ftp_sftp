@@ -4,6 +4,7 @@
 #include "stdafx.h"
 #include "ftp_sftp.h"
 #include "cJSON.h"
+#include "SFTPClient.h"
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
@@ -16,19 +17,29 @@ CWinApp theApp;
 
 using namespace std;
 
+#include<vector>
+using namespace std;
+
 static bool bSftp = false;
-static wchar_t csIp[MAX_PATH] = {};
-static wchar_t csPort[MAX_PATH] = {};
+static wchar_t wsIp[MAX_PATH] = {};
+static wchar_t wsPort[MAX_PATH] = {};
 static INTERNET_PORT intPort;
-static wchar_t csUsername[MAX_PATH] = {};
-static wchar_t csPassword[MAX_PATH] = {};
-static wchar_t csMode[MAX_PATH] = {};
+static wchar_t wsUsername[MAX_PATH] = {};
+static wchar_t wsPassword[MAX_PATH] = {};
+static wchar_t wsMode[MAX_PATH] = {};
 static wchar_t wsDir[MAX_PATH] = {};
+
+static char csIp[MAX_PATH] = {};
+static char csPort[MAX_PATH] = {};
+static char csUsername[MAX_PATH] = {};
+static char csPassword[MAX_PATH] = {};
+static char csDir[MAX_PATH] = {};
 
 static HINTERNET hInetSession = NULL;
 static HINTERNET hFtpConn = NULL;
 
 static wchar_t wsPathSplit[] = L"\\|/"; //文件路径分隔符控制
+static char    csPathSplit[] = "\\|/"; //文件路径分隔符控制
 
 /*
 
@@ -43,7 +54,7 @@ output:
 static std::vector<WCHAR*> split(const WCHAR* strTime)  
 {  
 	std::vector<WCHAR*> result;   
-	int pos = 0;//字符串结束标记，方便将最后一个单词入vector  
+	unsigned int pos = 0;//字符串结束标记，方便将最后一个单词入vector  
 	size_t i;
 	for( i = 0; i < wcslen(strTime); i++)  
 	{  
@@ -68,6 +79,7 @@ static std::vector<WCHAR*> split(const WCHAR* strTime)
 	}
 	return result;  
 } 
+
 static const wchar_t* wcstrrchr(const wchar_t* str, const wchar_t wc)  
 {  
 	const wchar_t* pwc = NULL;  
@@ -81,6 +93,7 @@ static const wchar_t* wcstrrchr(const wchar_t* str, const wchar_t wc)
 	}  
 	return pwc;  
 }  
+
 static const wchar_t* wcstrrchr(const wchar_t* str, const wchar_t* wc) //wc格式"\\|/"包括'\\"和'/'2种分割
 {
 	std::vector<WCHAR*>  vec = split(wc);
@@ -100,16 +113,79 @@ static const wchar_t* wcstrrchr(const wchar_t* str, const wchar_t* wc) //wc格式"
 	}  
 	return pwc;  
 }
+
 static void getPath_Name(const wchar_t* str, const wchar_t* wc,wchar_t* wsPath, wchar_t* wsName)
 {
 	const wchar_t* pwc = wcstrrchr(str,wc);
-	memset(wsPath,0,sizeof(wsPath));  
-	memset(wsName,0,sizeof(wsName));
+	wsPath[0]=0;  
+	wsName[0]=0;
 	if (pwc)
 	{
 		for (int i=0; i<pwc-str; i++)  
 			wsPath[i] = *(str+i); 
-		wsprintf(wsName,L"%s",pwc+1);
+		StringCchCopy(wsName,MAX_PATH,pwc+1);
+	}
+}
+
+static std::vector<char*> split(const char* strTime)  
+{  
+	std::vector<char*> result;   
+	unsigned int pos = 0;//字符串结束标记，方便将最后一个单词入vector  
+	size_t i;
+	for( i = 0; i < strlen(strTime); i++)  
+	{  
+		if(strTime[i] == '|')  
+		{  
+			char* temp = new char[i-pos+1];
+			memset(temp,0x00,sizeof(temp));
+			strncpy(temp,strTime+pos,i-pos);
+			temp[i-pos] = 0x00;
+			result.push_back(temp); 
+			pos=i+1;
+		}  
+	}  
+	//判断最后一个
+	if (pos < i)
+	{
+		char* temp = new char[i-pos+1];
+		memset(temp,0x00,sizeof(temp));
+		strncpy(temp,strTime+pos,i-pos);
+		temp[i-pos] = 0x00;
+		result.push_back(temp);
+	}
+	return result;  
+} 
+
+static const char* wcstrrchr(const char* str, const char* wc) //wc格式"\\|/"包括'\\"和'/'2种分割
+{
+	std::vector<char*>  vec = split(wc);
+
+	const char* pwc = NULL; 
+	for (int i=strlen(str)-1;i>=0;i--)  
+	{  
+		for (std::vector<char*>::const_iterator itr = vec.cbegin();itr!=vec.cend();itr++)
+		{	
+			if (strncmp(&str[i],*itr,1) == 0)  
+			{  
+				pwc = str + i;  
+				return pwc;  
+			}  
+		}
+
+	}  
+	return pwc;  
+}
+
+static void getPath_Name(const char* str, const char* wc,char* wsPath, char* wsName)
+{
+	const char* pwc = wcstrrchr(str,wc);
+	wsPath[0] = 0;
+	wsName[0] = 0;
+	if (pwc)
+	{
+		for (int i=0; i<pwc-str; i++)  
+			wsPath[i] = *(str+i); 
+		sprintf_s(wsName,MAX_PATH,"%s",pwc+1);
 	}
 }
 
@@ -143,6 +219,20 @@ static bool createMultiDir(const wchar_t* path)
 	return false;  
 } 
 
+static bool createMultiDir(const char* path)  
+{  
+	if (path == NULL) return false;  
+	if (PathIsDirectoryA(path)) return true;  
+
+	char csSubPath[MAX_PATH] = {}; 
+	char csSubName[MAX_PATH] = {};
+	getPath_Name(path,csPathSplit,csSubPath,csSubName); 
+	if (strlen(csSubPath) )
+		createMultiDir(csSubPath);
+	if(CreateDirectoryA(path,NULL)) return true;  
+	return false;  
+} 
+
 const char* ftpopen(const char* jason)
 {
 	char* ret = new char[LEN_1024];
@@ -157,34 +247,50 @@ const char* ftpopen(const char* jason)
 	memset(csPort,0,sizeof(csPort));
 	memset(csUsername,0,sizeof(csUsername));
 	memset(csPassword,0,sizeof(csPassword));
-	memset(csMode,0,sizeof(csMode));
+
+	memset(wsIp,0,sizeof(wsIp));
+	memset(wsPort,0,sizeof(wsPort));
+	memset(wsUsername,0,sizeof(wsUsername));
+	memset(wsPassword,0,sizeof(wsPassword));
+	memset(wsMode,0,sizeof(wsMode));
 
 	cJSON * item = NULL;
 	GET_JASON_OBJECT(root,item,"ip",ret);
-	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,csIp,sizeof(csIp)/sizeof(csIp[0]));
+	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsIp,sizeof(wsIp)/sizeof(wsIp[0]));
+	sprintf_s(csIp,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"port",ret);
-	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,csPort,sizeof(csPort)/sizeof(csPort[0]));
+	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsPort,sizeof(wsPort)/sizeof(wsPort[0]));
+	sprintf_s(csPort,MAX_PATH,"%s",item->valuestring);
 	intPort = (INTERNET_PORT)atoi(item->valuestring);
 	GET_JASON_OBJECT(root,item,"username",ret);
-	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,csUsername,sizeof(csUsername)/sizeof(csUsername[0]));
+	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsUsername,sizeof(wsUsername)/sizeof(wsUsername[0]));
+	sprintf_s(csUsername,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"password",ret);
-	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,csPassword,sizeof(csPassword)/sizeof(csPassword[0]));
+	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsPassword,sizeof(wsPassword)/sizeof(wsPassword[0]));
+	sprintf_s(csPassword,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"mode",ret);
-	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,csMode,sizeof(csMode)/sizeof(csMode[0]));
+	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsMode,sizeof(wsMode)/sizeof(wsMode[0]));
 	cJSON_Delete(root);
-	bSftp = csMode[0] == L'1'?true:false;
+	bSftp = wsMode[0] == L'1'?true:false;
 
 	if (bSftp)
 	{
 		//保留接口
-
+		int ivalue = GWI_SFTPClient::sftpOpen(csIp,intPort,csUsername,csPassword);
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
 		hInetSession=InternetOpen(AfxGetAppName(),INTERNET_OPEN_TYPE_PRECONFIG,NULL,NULL,0);
 		if(!hInetSession) return ret;
-		hFtpConn=InternetConnect(hInetSession,csIp,intPort,
-			csUsername,csPassword,INTERNET_SERVICE_FTP,INTERNET_FLAG_PASSIVE,0);
+		hFtpConn=InternetConnect(hInetSession,wsIp,intPort,
+			wsUsername,wsPassword,INTERNET_SERVICE_FTP,INTERNET_FLAG_PASSIVE,0);
 		if(!hFtpConn) 
 		{
 			InternetCloseHandle(hInetSession);
@@ -205,15 +311,24 @@ const char* cd(const char* jason)
 		RETURN_ERROR(ret,GWI_PLUGIN_ERROR,"json解析失败","");
 	}
 
-	memset(wsDir,0,sizeof(wsDir));
+	char csDir[MAX_PATH] = {};
+	memset(csDir,0,sizeof(csDir));
 	cJSON * item = NULL;
 	GET_JASON_OBJECT(root,item,"dir",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsDir,sizeof(wsDir)/sizeof(wsDir[0]));
+	sprintf_s(csDir,MAX_PATH,"%s",item->valuestring);
 	cJSON_Delete(root);
 
 	if (bSftp)
 	{
-		//sftp接口保留
+		int ivalue = GWI_SFTPClient::sftpCd(csDir);
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
@@ -227,13 +342,13 @@ const char* cd(const char* jason)
 }
 
 //传入要遍历的文件夹路径，并遍历相应文件夹 得到文件树的叶子节点 
-static bool TraverseDirectory(wchar_t* Dir,wchar_t* FtpDir,wchar_t* ExternDir)      
+static bool TraverseDirectory(wchar_t Dir[MAX_PATH],wchar_t FtpDir[MAX_PATH],wchar_t ExternDir[MAX_PATH])      
 {  
 	WIN32_FIND_DATA FindFileData;  
 	HANDLE hFind=INVALID_HANDLE_VALUE;  
 	wchar_t DirSpec[MAX_PATH];                  //定义要遍历的文件夹的目录  
-	wsprintf(DirSpec,L"%s\\*",Dir);
-	
+	StringCchCopy(DirSpec,MAX_PATH,Dir);
+	StringCchCat(DirSpec,MAX_PATH,L"\\*");
  
 	bool bIsEmptyFolder = true;
 	hFind=FindFirstFile(DirSpec,&FindFileData);          //找到文件夹中的第一个文件  
@@ -309,16 +424,23 @@ const char* uploaddir(const char* jason)
 		RETURN_ERROR(ret,GWI_PLUGIN_ERROR,"json解析失败","");
 	}
 
-	wchar_t wsDestDir[MAX_PATH] = {};
 	wchar_t wsSrcDir[MAX_PATH] = {};
-	memset(wsDestDir,0,sizeof(wsDestDir));
+	wchar_t wsDestDir[MAX_PATH] = {};
 	memset(wsSrcDir,0,sizeof(wsSrcDir));
+	memset(wsDestDir,0,sizeof(wsDestDir));
+
+	char csDestDir[MAX_PATH] = {};
+	char csSrcDir[MAX_PATH] = {};
+	memset(csDestDir,0,sizeof(csDestDir));
+	memset(csSrcDir,0,sizeof(csSrcDir));
 
 	cJSON * item = NULL;
 	GET_JASON_OBJECT(root,item,"srcdir",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsSrcDir,sizeof(wsSrcDir)/sizeof(wsSrcDir[0]));
+	sprintf_s(csSrcDir,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"destdir",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsDestDir,sizeof(wsDestDir)/sizeof(wsDestDir[0]));
+	sprintf_s(csDestDir,MAX_PATH,"%s",item->valuestring);
 	cJSON_Delete(root);
 
 	WIN32_FIND_DATA FindFileData;  
@@ -335,7 +457,14 @@ const char* uploaddir(const char* jason)
 
 	if (bSftp)
 	{
-		//sftp保留
+		int ivalue = GWI_SFTPClient::sftpUpdateFileDir(csDestDir,csSrcDir);
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
@@ -368,11 +497,18 @@ const char* uploadfile(const char* jason)
 	memset(wsSrcfilename,0,sizeof(wsSrcfilename));
 	memset(wsDestfilename,0,sizeof(wsDestfilename));
 
+	char csSrcfilename[MAX_PATH] = {};
+	char csDestfilename[MAX_PATH] = {};
+	memset(csSrcfilename,0,sizeof(csSrcfilename));
+	memset(csDestfilename,0,sizeof(csDestfilename));
+
 	cJSON * item = NULL;
 	GET_JASON_OBJECT(root,item,"srcfilename",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsSrcfilename,sizeof(wsSrcfilename)/sizeof(wsSrcfilename[0]));
+	sprintf_s(csSrcfilename,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"destfilename",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsDestfilename,sizeof(wsDestfilename)/sizeof(wsDestfilename[0]));
+	sprintf_s(csDestfilename,MAX_PATH,"%s",item->valuestring);
 	cJSON_Delete(root);
 
 	WIN32_FIND_DATA FindFileData;  
@@ -390,6 +526,18 @@ const char* uploadfile(const char* jason)
 	if (bSftp)
 	{
 		//sftp保留
+		char csPath[MAX_PATH] = {};
+		char csName[MAX_PATH] = {};
+		getPath_Name(csDestfilename,csPathSplit,csPath,csName);
+		char* pcName = strlen(csName)>0?csName:nullptr;
+		int ivalue = GWI_SFTPClient::uploadFile(csPath,csSrcfilename,pcName);
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
@@ -407,7 +555,7 @@ const char* uploadfile(const char* jason)
 		{
 			DWORD dwPathLen;
 			FtpGetCurrentDirectory(hFtpConn,wsSubPath,&dwPathLen);
-			wsprintf(wsSubName,L"%s",wsDestfilename);
+			StringCchCopy(wsSubName,MAX_PATH,wsDestfilename);
 		}
 		FtpSetCurrentDirectory(hFtpConn,wsSubPath);
 
@@ -421,7 +569,7 @@ const char* uploadfile(const char* jason)
 }
 
 static bool bNotFtpFindFirstFile = true;
-static bool preDownloaddir(wchar_t* FtpDir,wchar_t* LocalDir,wchar_t* ExternDir) 
+static bool preDownloaddir(wchar_t FtpDir[MAX_PATH],wchar_t LocalDir[MAX_PATH],wchar_t ExternDir[MAX_PATH]) 
 {
 	bool bret = false;bool bIsEmptyFolder = true;
 	WIN32_FIND_DATA findData;
@@ -433,7 +581,7 @@ static bool preDownloaddir(wchar_t* FtpDir,wchar_t* LocalDir,wchar_t* ExternDir)
 	StringCchCat(wsLocalDirAdd,MAX_PATH,ExternDir);
 	createMultiDir(wsLocalDirAdd);
 
-	HINTERNET hFtpConn_T=InternetConnect(hInetSession,csIp,intPort,csUsername,csPassword,INTERNET_SERVICE_FTP,INTERNET_FLAG_PASSIVE,0);
+	HINTERNET hFtpConn_T=InternetConnect(hInetSession,wsIp,intPort,wsUsername,wsPassword,INTERNET_SERVICE_FTP,INTERNET_FLAG_PASSIVE,0);
 	FtpSetCurrentDirectory(hFtpConn_T,FtpDir);
 	if(!(hFind=FtpFindFirstFile(hFtpConn_T,_T("*"),&findData,0,0)))
 	{
@@ -473,7 +621,10 @@ static bool preDownloaddir(wchar_t* FtpDir,wchar_t* LocalDir,wchar_t* ExternDir)
 		else
 		{
 			SetCurrentDirectory(wsLocalDirAdd);
-			bret = FtpGetFile(hFtpConn,findData.cFileName,findData.cFileName,FALSE,FILE_ATTRIBUTE_NORMAL,FTP_TRANSFER_TYPE_BINARY|INTERNET_FLAG_NO_CACHE_WRITE,0);
+			FtpSetCurrentDirectory(hFtpConn_T,FtpDir);
+
+			bret = FtpGetFile(hFtpConn_T,findData.cFileName,findData.cFileName,FALSE,FILE_ATTRIBUTE_NORMAL,FTP_TRANSFER_TYPE_BINARY|
+				INTERNET_FLAG_NO_CACHE_WRITE,0);
 			if (!bret)
 			{
 				InternetCloseHandle(hFtpConn_T);
@@ -493,22 +644,36 @@ const char* downloaddir(const char* jason)
 	{
 		RETURN_ERROR(ret,GWI_PLUGIN_ERROR,"json解析失败","");
 	}
-
 	wchar_t wsDestDir[MAX_PATH] = {};
 	wchar_t wsSrcDir[MAX_PATH] = {};
 	memset(wsDestDir,0,sizeof(wsDestDir));
 	memset(wsSrcDir,0,sizeof(wsSrcDir));
 
+	char csDestDir[MAX_PATH] = {};
+	char csSrcDir[MAX_PATH] = {};
+	memset(csDestDir,0,sizeof(csDestDir));
+	memset(csSrcDir,0,sizeof(csSrcDir));
+
 	cJSON * item = NULL;
 	GET_JASON_OBJECT(root,item,"srcdir",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsSrcDir,sizeof(wsSrcDir)/sizeof(wsSrcDir[0]));
+	sprintf_s(csSrcDir,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"destdir",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsDestDir,sizeof(wsDestDir)/sizeof(wsDestDir[0]));
+	sprintf_s(csDestDir,MAX_PATH,"%s",item->valuestring);
 	cJSON_Delete(root);
 
 	if (bSftp)
 	{
-		//sftp保留
+		createMultiDir(csDestDir);
+		int ivalue = GWI_SFTPClient::sftpDwnloadFileDir(csSrcDir,csDestDir);
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
@@ -543,16 +708,31 @@ const char* downloadfile(const char* jason)
 	memset(wsSrcfilename,0,sizeof(wsSrcfilename));
 	memset(wsDestfilename,0,sizeof(wsDestfilename));
 
+	char csSrcfilename[MAX_PATH] = {};
+	char csDestfilename[MAX_PATH] = {};
+	memset(csSrcfilename,0,sizeof(csSrcfilename));
+	memset(csDestfilename,0,sizeof(csDestfilename));
+
 	cJSON * item = NULL;
 	GET_JASON_OBJECT(root,item,"srcfilename",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsSrcfilename,sizeof(wsSrcfilename)/sizeof(wsSrcfilename[0]));
+	sprintf_s(csSrcfilename,MAX_PATH,"%s",item->valuestring);
 	GET_JASON_OBJECT(root,item,"destfilename",ret);
 	MultiByteToWideChar(CP_ACP,0,item->valuestring,strlen(item->valuestring)+1,wsDestfilename,sizeof(wsDestfilename)/sizeof(wsDestfilename[0]));
+	sprintf_s(csDestfilename,MAX_PATH,"%s",item->valuestring);
 	cJSON_Delete(root);
 
 	if (bSftp)
 	{
 		//sftp保留
+		int ivalue = GWI_SFTPClient::downloadFile(csSrcfilename,csDestfilename);
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
@@ -560,6 +740,7 @@ const char* downloadfile(const char* jason)
 		{
 			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,"连接失败","");
 		}
+		HINTERNET hFtpConn_T=InternetConnect(hInetSession,wsIp,intPort,wsUsername,wsPassword,INTERNET_SERVICE_FTP,INTERNET_FLAG_PASSIVE,0);
 		const wchar_t* pwcSrcfilename = wcstrrchr(wsSrcfilename,L'/');
 		wchar_t wsSubPath[MAX_PATH] = {}; 
 		wchar_t wsSubName[MAX_PATH] = {}; 
@@ -568,22 +749,24 @@ const char* downloadfile(const char* jason)
 		{
 			DWORD dwPathLen;
 			FtpGetCurrentDirectory(hFtpConn,wsSubPath,&dwPathLen);
-			wsprintf(wsSubName,L"%s",wsSrcfilename);
+			StringCchCopy(wsSubName,MAX_PATH,wsSrcfilename);
 		}
-		FtpSetCurrentDirectory(hFtpConn,wsSubPath);
+		FtpSetCurrentDirectory(hFtpConn_T,wsSubPath);
 		wchar_t wsDestPath[MAX_PATH] = {}; 
 		wchar_t wsDestName[MAX_PATH] = {}; 
 		getPath_Name(wsDestfilename,wsPathSplit,wsDestPath,wsDestName);
 		if (wcslen(wsDestPath) <= 0)
 		{
 			GetCurrentDirectory(MAX_PATH,wsDestPath);
-			wsprintf(wsDestName,L"%s",wsDestfilename);
+			StringCchCopy(wsDestName,MAX_PATH,wsDestfilename);
 		}
 		createMultiDir(wsDestPath);
 		SetCurrentDirectory(wsDestPath);
 
-		if(FtpGetFile(hFtpConn,wsSubName,wsDestName,FALSE,FILE_ATTRIBUTE_NORMAL,FTP_TRANSFER_TYPE_BINARY|
-			INTERNET_FLAG_NO_CACHE_WRITE,0))
+		bool  bFtpGetFileFlag = FtpGetFile(hFtpConn_T,wsSubName,wsDestName,FALSE,FILE_ATTRIBUTE_NORMAL,FTP_TRANSFER_TYPE_BINARY|
+			INTERNET_FLAG_NO_CACHE_WRITE,0);
+		InternetCloseHandle(hFtpConn_T);
+		if(bFtpGetFileFlag)
 		{
 			RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 		}
@@ -597,6 +780,14 @@ const char* ftpclose(const char* jason)
 	if (bSftp)
 	{
 		//sftp保留
+		int ivalue = GWI_SFTPClient::sftpClose();
+		if (ivalue)
+		{
+			char csErrorMsg[MAX_PATH] = {};
+			GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(ivalue,csErrorMsg);
+			RETURN_ERROR(ret,GWI_PLUGIN_ERROR,csErrorMsg,"");
+		}
+		RETURN_SUCCESS(ret,GWI_PLUGIN_SUCCESS,"");
 	}
 	else
 	{
@@ -630,47 +821,96 @@ int _tmain(int argc, TCHAR* argv[], TCHAR* envp[])
 		}
 		else
 		{
-			
-			// TODO: 在此处为应用程序的行为编写代码。
-			const char csOpen[] = "{\"ip\":\"172.20.10.3\",\"port\":\"21\",\"username\":\"dell\",\"password\":\"wsh\",\"mode\":\"0\"}";
+			/*
+			//const char csOpen[] = "{\"ip\":\"172.20.10.3\",\"port\":\"21\",\"username\":\"dell\",\"password\":\"wsh\",\"mode\":\"0\"}";
+			const char csOpen[] = "{\"ip\":\"127.0.0.1\",\"port\":\"2023\",\"username\":\"sftp\",\"password\":\"sftp\",\"mode\":\"1\"}";
 		    const char csCd[] = "{\"dir\":\"/test\"}";
-			const char csDownloadFile[] = "{\"srcfilename\":\"/test/test1.txt\",\"destfilename\":\"d:\\\\ftp_test\\\\test1.txt\"}";
-		    const char csDownloadDir[] = "{\"srcdir\":\"/test\",\"destdir\":\"D:\\\\ftp_test\"}";
+			const char csDownloadFile[] = "{\"srcfilename\":\"/gwi/txt/g.txt\",\"destfilename\":\"d:\\\\ftp_test\\\\sftp\\\\test1.txt\"}";
+		    const char csDownloadDir[] = "{\"srcdir\":\"/gwi/dir/\",\"destdir\":\"D:\\\\ftp_test\\\\sftpdir\"}";
 			const char csUpdateFile[] = "{\"srcfilename\":\"d:\\\\ftp_test\\\\gwi.txt\",\"destfilename\":\"/gwi/txt/g.txt\"}";
-			const char csUpdateDir[] = "{\"srcdir\":\"d:\\\\ftp_test\",\"destdir\":\"/gwi/txt\"}";
+			const char csUpdateDir[] = "{\"srcdir\":\"d:\\\\ftp_test\",\"destdir\":\"/gwi/dir/\"}";
+			const char* pcRet = NULL;
+			pcRet = ftpopen(csOpen);
+			printf("ftpopen=>%s\n",pcRet);
+			//getchar();
+			pcRet = cd(csCd);
+			printf("cd=>%s\n",pcRet);
+			//getchar();
+
+			pcRet = uploadfile(csUpdateFile);
+			printf("uploadfile=>%s\n",pcRet);
+			//getchar();
+
+
+			pcRet = uploaddir(csUpdateDir);
+			printf("uploaddir=>%s\n",pcRet);
+			//getchar();
+			
+			pcRet = downloadfile(csDownloadFile);
+			printf("downloadfile=>%s\n",pcRet);
+			//getchar();
+			
+			
+			pcRet = downloaddir(csDownloadDir);
+			printf("downloaddir=>%s\n",pcRet);
+			getchar();
+			
+			pcRet = ftpclose(NULL);
+			printf("ftpclose=>%s\n",pcRet);
+			getchar();
+			*/
+			//GWI_SFTPClient::sftpOpen("127.0.0.1",2023,"sftp","sftp");
+			//GWI_SFTPClient::uploadFile("/test","D:\\ftp_test\\gwi.txt",NULL);
+			//GWI_SFTPClient::downloadFile("/test","d:\\ftp_test\\test");
+			//CString csFile;
+			//GWI_SFTPClient::getFileList("/test","",csFile);
+			//int iret = GWI_SFTPClient::sftpDwnloadFileDir("/test","d:\\ftp_test\\gwi");
+			//int iret = GWI_SFTPClient::sftpUpdateFileDir("/test","d:\\ftp_test\\gwi");
+			//char path[MAX_PATH] = "/test/gwi/123HAO号";
+			//int iret = GWI_SFTPClient::sftpCd(path);
+			//	char errmsg[MAX_PATH] = {};
+			//GWI_SFTPClient::getGWI_SFTPClient_ErrorMsg_By_Errorcode(iret,errmsg);
+			//printf("%d==>%s",iret,errmsg);
+		//	getchar();
+			//GWI_SFTPClient::sftpClose();
+			// TODO: 在此处为应用程序的行为编写代码。
+			const char csOpen[] = "{\"ip\":\"127.0.0.1\",\"port\":\"21\",\"username\":\"dell\",\"password\":\"wsh\",\"mode\":\"0\"}";
+		    const char csCd[] = "{\"dir\":\"/test\"}";
+			const char csDownloadFile[] = "{\"srcfilename\":\"/test/gwi/test1/test2/test.txt\",\"destfilename\":\"d:\\\\ftp_test\\\\ftp_file\\\\test1.txt\"}";
+		    const char csDownloadDir[] = "{\"srcdir\":\"/test\",\"destdir\":\"D:\\\\ftp_test\\\\ftpdir\"}";
+			const char csUpdateFile[] = "{\"srcfilename\":\"d:\\\\ftp_test\\\\update\\\\gwi.txt\",\"destfilename\":\"/gwi/txt/file/g.txt\"}";
+			const char csUpdateDir[] = "{\"srcdir\":\"d:\\\\ftp_test\\\\update\\\\dir\",\"destdir\":\"/gwi/txt\"}";
 			const char* pcRet = NULL;
 			pcRet = ftpopen(csOpen);
 			printf("%s\n",pcRet);
+		/*
 			//getchar();
 			pcRet = cd(csCd);
 			printf("%s\n",pcRet);
 			//getchar();
-			/*
-			pcRet = downloadfile(csDownloadFile);
-			printf("%s\n",pcRet);
-			//getchar();
 			*/
-			/*
-			pcRet = downloaddir(csDownloadDir);
-			printf("%s\n",pcRet);
-			getchar();
-			*/
-
-			/*
 			pcRet = uploadfile(csUpdateFile);
 			printf("%s\n",pcRet);
 			getchar();
-			*/
 
 			pcRet = uploaddir(csUpdateDir);
 			printf("%s\n",pcRet);
-			getchar();
+			//getchar();
+			
+			//pcRet = downloadfile(csDownloadFile);
+			//printf("%s\n",pcRet);
+			//getchar();
+			
+			
+			//pcRet = downloaddir(csDownloadDir);
+			//printf("%s\n",pcRet);
+			//getchar();
+			
 
 			pcRet = ftpclose(NULL);
 			printf("%s\n",pcRet);
 			getchar();
-			
-	
+		
 		}
 	}
 	else
@@ -682,3 +922,24 @@ int _tmain(int argc, TCHAR* argv[], TCHAR* envp[])
 
 	return nRetCode;
 }
+
+/*
+int main(int argc, char *argv[])
+{
+	uploadFile("127.0.0.1",
+			   22,
+			   "user",
+			   "password",
+			   "/test/qee/eee/",
+			   "c:\\自助票据v1.0.0.5.20150720.exe",
+			   "v1.0.0.5.20150720.exe");
+
+	downloadFile("127.0.0.1",
+			   22,
+			   "user",
+			   "password",
+			   "/test/qee/eee/v1.0.0.5.20150720.exe",
+			   "c:\\dsdfsdf\\adf\\5.ssss.exe");
+    return 0;
+}
+*/

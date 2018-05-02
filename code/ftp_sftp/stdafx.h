@@ -46,17 +46,17 @@
 #define  LEN_1024  1024
 
 #define  RETURN_SUCCESS(ret,errno,data){\
-	sprintf((ret),"\"success\": \"true\",\"errno\":\"%s\",\"description\":\"operation success\",\"data\":\"%s\"",(errno),(data));\
+	sprintf_s((ret),LEN_1024,"{\"success\": true,\"errno\":\"%s\",\"description\":\"operation success\",\"data\":\"%s\"}",(errno),(data));\
 	return (ret);\
 }
 
 #define  RETURN_ERROR(ret,errno,descript,data){\
-	sprintf((ret),"\"success\": \"false\",\"errno\":\"%s\",\"description\":\"%s\",\"data\":\"%s\"",(errno),(descript),(data));\
+	sprintf_s((ret),LEN_1024,"{\"success\": false,\"errno\":\"%s\",\"description\":\"%s\",\"data\":\"%s\"}",(errno),(descript),(data));\
 	return (ret);\
 }
 
 #define  ASSERT_PTR(jason,ret) \
-	strcpy((ret),GWI_PLUGIN_ERROR);\
+	strcpy_s((ret),11,GWI_PLUGIN_ERROR);\
 	if((jason) == nullptr)\
 {\
 	RETURN_ERROR((ret),GWI_PLUGIN_ERROR,"入参为空指针","");\
